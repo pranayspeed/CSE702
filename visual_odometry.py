@@ -2,6 +2,344 @@
 import cv2
 import numpy as np
 
+from scipy.optimize import least_squares
+
+#from open3d.visualization import *  
+
+import matplotlib.pyplot as plt
+from mpl_toolkits import mplot3d
+
+# use mplotlib figure to draw in 3D trajectories 
+
+kPlotSleep = 0.0001 
+class Mplot3d:
+    def __init__(self, title=''):
+        self.fig = plt.figure()
+        self.ax = self.fig.gca(projection='3d') 
+        if title is not '':
+            self.ax.set_title(title)     
+        self.ax.set_xlabel('X axis')
+        self.ax.set_ylabel('Y axis')
+        self.ax.set_zlabel('Z axis')		   		
+
+        self.axis_computed = False 
+        self.xlim = [float("inf"),float("-inf")]
+        self.ylim = [float("inf"),float("-inf")]
+        self.zlim = [float("inf"),float("-inf")]        
+
+        self.handle_map = {}
+        self.setAxis()
+
+    def setAxis(self):		
+        self.ax.axis('equal')        
+        if self.axis_computed:	
+            self.ax.set_xlim(self.xlim)
+            self.ax.set_ylim(self.ylim)  
+            self.ax.set_zlim(self.zlim)                             
+        self.ax.legend()
+
+    def drawTraj(self, traj, name, color='r', marker='.'):
+        np_traj = np.asarray(traj)        
+        if name in self.handle_map:
+            handle = self.handle_map[name]
+            self.ax.collections.remove(handle)
+        self.updateMinMax(np_traj)
+        handle = self.ax.scatter3D(np_traj[:, 0], np_traj[:, 1], np_traj[:, 2], c=color, marker=marker)
+        handle.set_label(name)
+        self.handle_map[name] = handle
+
+    def updateMinMax(self, np_traj):
+        xmax,ymax,zmax = np.amax(np_traj,axis=0)
+        xmin,ymin,zmin = np.amin(np_traj,axis=0)        
+        cx = 0.5*(xmax+xmin)
+        cy = 0.5*(ymax+ymin)
+        cz = 0.5*(zmax+zmin) 
+        if False: 
+            # update maxs       
+            if xmax > self.xlim[1]:
+                self.xlim[1] = xmax 
+            if ymax > self.ylim[1]:
+                self.ylim[1] = ymax 
+            if zmax > self.zlim[1]:
+                self.zlim[1] = zmax                         
+            # update mins
+            if xmin < self.xlim[0]:
+                self.xlim[0] = xmin   
+            if ymin < self.ylim[0]:
+                self.ylim[0] = ymin        
+            if zmin < self.zlim[0]:
+                self.zlim[0] = zmin     
+        # make axis actually squared
+        if True:
+            #smin = min(self.xlim[0],self.ylim[0],self.zlim[0])                                            
+            #smax = max(self.xlim[1],self.ylim[1],self.zlim[1])
+            smin = min(xmin,ymin,zmin)                                            
+            smax = max(xmax,ymax,zmax)            
+            delta = 0.5*(smax - smin)
+            self.xlim = [cx-delta,cx+delta]
+            self.ylim = [cy-delta,cy+delta]
+            self.zlim = [cz-delta,cz+delta]      
+        self.axis_computed = True   
+
+    def refresh(self):
+        self.setAxis()
+        plt.pause(kPlotSleep)
+
+
+def poseRt(R, t):
+    ret = np.eye(4)
+    ret[:3, :3] = R
+    ret[:3, 3] = t
+    return ret 
+
+def get_grayscale_img(image):
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def load_calib(filepath):
+    print(filepath)
+    with open(filepath, 'r') as f:
+        str_val = f.readline().split(":")[1]
+        params = np.fromstring(str_val, dtype=np.float64, sep=' ')
+        print(params)
+        P_l = np.reshape(params, (3, 4))
+        K_l = P_l[0:3, 0:3]
+        str_val = f.readline().split(":")[1]
+        params = np.fromstring(str_val, dtype=np.float64, sep=' ')
+        P_r = np.reshape(params, (3, 4))
+        K_r = P_r[0:3, 0:3]
+    return K_l, P_l, K_r, P_r
+
+class Visual_Odometry_Stereo:
+    def __init__(self, calib_file, min_num_feat, focal=1, pp=(0.,0.)):
+        self.rotation= np.identity(3)
+        self.translation = np.zeros((3,1))
+        self.min_num_feat = min_num_feat
+        self.focal = focal
+        self.pp = pp
+        self.fast = cv2.FastFeatureDetector_create()
+
+        block=11
+        P1 = block* block * 8
+        P2 = block* block * 32
+        self.stereo = cv2.StereoSGBM_create(minDisparity=0, numDisparities=32, blockSize=block, P1=P1, P2=P2)
+        
+        self.K_l, self.P_l, self.K_r, self.P_r = load_calib(calib_file)
+
+        self.lk_params = dict(winSize=(15, 15),
+                              flags=cv2.MOTION_AFFINE,
+                              maxLevel=3,
+                              criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 0.03))
+
+        self.pts3d = None
+    def calculate_right_qs(self, q1, q2, disp1, disp2, min_disp=0.0, max_disp=100.0):
+        def get_idxs(q, disp):
+            q_idx = q.astype(int)
+            disp = disp.T[q_idx[:, 0], q_idx[:, 1]]
+            return disp, np.where(np.logical_and(min_disp < disp, disp < max_disp), True, False)
+        
+        # Get the disparity's for the feature points and mask for min_disp & max_disp
+        disp1, mask1 = get_idxs(q1, disp1)
+        disp2, mask2 = get_idxs(q2, disp2)
+        
+        # Combine the masks 
+        in_bounds = np.logical_and(mask1, mask2)
+        
+        # Get the feature points and disparity's there was in bounds
+        q1_l, q2_l, disp1, disp2 = q1[in_bounds], q2[in_bounds], disp1[in_bounds], disp2[in_bounds]
+        
+        # Calculate the right feature points 
+        q1_r, q2_r = np.copy(q1_l), np.copy(q2_l)
+        q1_r[:, 0] -= disp1
+        q2_r[:, 0] -= disp2
+        
+        return q1_l, q1_r, q2_l, q2_r
+
+    def calc_3d(self, q1_l, q1_r, q2_l, q2_r):
+         # Triangulate points from i-1'th image
+        Q1 = cv2.triangulatePoints(self.P_l, self.P_r, q1_l.T, q1_r.T)
+        # Un-homogenize
+        Q1 = np.transpose(Q1[:3] / Q1[3])
+
+        # Triangulate points from i'th image
+        Q2 = cv2.triangulatePoints(self.P_l, self.P_r, q2_l.T, q2_r.T)
+        # Un-homogenize
+        Q2 = np.transpose(Q2[:3] / Q2[3])
+        return Q1, Q2                       
+
+
+    def extract_and_track(self, I1_l, I1_r, I2_l, I2_r):
+        I1_l_grayscale = get_grayscale_img(I1_l)
+        I2_l_grayscale = get_grayscale_img(I2_l)
+        I1_r_grayscale = get_grayscale_img(I1_r)
+        I2_r_grayscale = get_grayscale_img(I2_r)
+
+        I1_disparity = self.compute_disparity(I1_l_grayscale, I1_r_grayscale)
+        I2_disparity = self.compute_disparity(I2_l_grayscale, I2_r_grayscale)
+
+        I1_l_kps = self.extract_features(I2_l_grayscale)
+
+        I1_kps, I2_kps = self.track_keypoints(I1_l_grayscale, I2_l_grayscale, I1_l_kps)
+
+        #T = self.calculate_transform(I1_kps, I2_kps)
+        #return T
+        #self.get_3d_points_from_disparity(I1_l, I1_disparity)
+
+
+        # Calculate the right keypoints
+        tp1_l, tp1_r, tp2_l, tp2_r = self.calculate_right_qs(I1_kps, I2_kps, I1_disparity, I2_disparity)
+
+        # Calculate the 3D points
+        Q1, Q2 = self.calc_3d(tp1_l, tp1_r, tp2_l, tp2_r)
+
+        self.pts3d = Q2
+        # Estimate the transformation matrix
+        transformation_matrix = self.estimate_pose(tp1_l, tp2_l, Q1, Q2)
+        return transformation_matrix
+
+
+    def estimate_pose(self, q1, q2, Q1, Q2, max_iter=100):
+        early_termination_threshold = 5
+
+        # Initialize the min_error and early_termination counter
+        min_error = float('inf')
+        early_termination = 0
+
+        for _ in range(max_iter):
+            # Choose 6 random feature points
+            sample_idx = np.random.choice(range(q1.shape[0]), 6)
+            sample_q1, sample_q2, sample_Q1, sample_Q2 = q1[sample_idx], q2[sample_idx], Q1[sample_idx], Q2[sample_idx]
+
+            # Make the start guess
+            in_guess = np.zeros(6)
+            # Perform least squares optimization
+            opt_res = least_squares(self.reprojection_residuals, in_guess, method='lm', max_nfev=200,
+                                    args=(sample_q1, sample_q2, sample_Q1, sample_Q2))
+
+            # Calculate the error for the optimized transformation
+            error = self.reprojection_residuals(opt_res.x, q1, q2, Q1, Q2)
+            error = error.reshape((Q1.shape[0] * 2, 2))
+            error = np.sum(np.linalg.norm(error, axis=1))
+
+            # Check if the error is less the the current min error. Save the result if it is
+            if error < min_error:
+                min_error = error
+                out_pose = opt_res.x
+                early_termination = 0
+            else:
+                early_termination += 1
+            if early_termination == early_termination_threshold:
+                # If we have not fund any better result in early_termination_threshold iterations
+                break
+
+        # Get the rotation vector
+        r = out_pose[:3]
+        # Make the rotation matrix
+        R, _ = cv2.Rodrigues(r)
+        # Get the translation vector
+        t = out_pose[3:]
+        # Make the transformation matrix
+        transformation_matrix = poseRt(R, t)
+        return transformation_matrix
+
+    def reprojection_residuals(self, dof, q1, q2, Q1, Q2):
+        # Get the rotation vector
+        r = dof[:3]
+        # Create the rotation matrix from the rotation vector
+        R, _ = cv2.Rodrigues(r)
+        # Get the translation vector
+        t = dof[3:]
+        # Create the transformation matrix from the rotation matrix and translation vector
+        transf = poseRt(R, t)
+
+        # Create the projection matrix for the i-1'th image and i'th image
+        f_projection = np.matmul(self.P_l, transf)
+        b_projection = np.matmul(self.P_l, np.linalg.inv(transf))
+
+        # Make the 3D points homogenize
+        ones = np.ones((q1.shape[0], 1))
+        Q1 = np.hstack([Q1, ones])
+        Q2 = np.hstack([Q2, ones])
+
+        # Project 3D points from i'th image to i-1'th image
+        q1_pred = Q2.dot(f_projection.T)
+        # Un-homogenize
+        q1_pred = q1_pred[:, :2].T / q1_pred[:, 2]
+
+        # Project 3D points from i-1'th image to i'th image
+        q2_pred = Q1.dot(b_projection.T)
+        # Un-homogenize
+        q2_pred = q2_pred[:, :2].T / q2_pred[:, 2]
+
+        # Calculate the residuals
+        residuals = np.vstack([q1_pred - q1.T, q2_pred - q2.T]).flatten()
+        return residuals
+
+    
+    def get_3d_points_from_disparity(self, img, disparity):
+        print(disparity.shape)
+
+    def compute_disparity(self, img_l_gray, img_r_gray):
+        disparity = self.stereo.compute( img_l_gray, img_r_gray)
+        return np.divide(disparity.astype(np.float32), 16)
+        #return cv2.convertScaleAbs(disparity, beta=16)              
+
+    def extract_features(self, curr_image):
+        # find and draw the keypoints
+        return self.fast.detect(curr_image,None)
+
+    def track_keypoints(self, img1, img2, kp1, max_error=4):
+        # Convert the keypoints into a vector of points and expand the dims so we can select the good ones
+        trackpoints1 = np.expand_dims(cv2.KeyPoint_convert(kp1), axis=1)
+
+        # Use optical flow to find tracked counterparts
+        trackpoints2, st, err = cv2.calcOpticalFlowPyrLK(img1, img2, trackpoints1, None, **self.lk_params)
+
+        # Convert the status vector to boolean so we can use it as a mask
+        trackable = st.astype(bool)
+
+        # Create a maks there selects the keypoints there was trackable and under the max error
+        under_thresh = np.where(err[trackable] < max_error, True, False)
+
+        # Use the mask to select the keypoints
+        trackpoints1 = trackpoints1[trackable][under_thresh]
+        trackpoints2 = np.around(trackpoints2[trackable][under_thresh])
+
+        # Remove the keypoints there is outside the image
+        h, w = img1.shape
+        in_bounds = np.where(np.logical_and(trackpoints2[:, 1] < h, trackpoints2[:, 0] < w), True, False)
+        trackpoints1 = trackpoints1[in_bounds]
+        trackpoints2 = trackpoints2[in_bounds]
+
+        return trackpoints1, trackpoints2
+
+    def track_features(self, ref_img, curr_img, ref_pts):
+        lk_params = dict(winSize  = (21, 21), 
+                              maxLevel = 3,
+                              criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))        
+
+        kps_cur, st, err = cv2.calcOpticalFlowPyrLK(ref_img, curr_img, ref_pts, None, **lk_params)  #shape: [k,2] [k,1] [k,1]
+        st = st.reshape(st.shape[0])
+ 
+        #res.idxs_ref = (st == 1)
+        idxs_ref = [i for i,v in enumerate(st) if v== 1]
+        idxs_cur = idxs_ref.copy()       
+        kps_ref_matched = kps_ref[idxs_ref] 
+        kps_cur_matched = kps_cur[idxs_cur]  
+        kps_ref = kps_ref_matched  # with LK we follow feature trails hence we can forget unmatched features 
+        kps_cur = kps_cur_matched
+        #des_cur = None                      
+        return  kps_ref, kps_cur
+
+
+
+
+    def calculate_transform(self, curr_features, prev_features):	     
+        # here, the essential matrix algorithm uses the five-point algorithm solver by D. Nister (see the notes and paper above )     
+        E, self.mask_match = cv2.findEssentialMat(curr_features, prev_features, focal=1, pp=(0., 0.), method=cv2.RANSAC, prob=0.999, threshold=0.0003)                         
+        _, R, t, mask = cv2.recoverPose(E, curr_features, prev_features, focal=1, pp=(0., 0.))                                                     
+        return poseRt(R,t.T)  # Trc  homogeneous transformation matrix with respect to 'ref' frame,  pr_= Trc * pc_        
+
 
 # function [R, T, cliqueSize, outliers, resnorm] = visodo(I1_l, I1_r, I2_l, I2_r, P1, P2)
 # %% The core visual odometry function
@@ -83,6 +421,8 @@ def visodo(I1_l, I1_r, I2_l, I2_r, P1, P2):
     cv2.waitKey(1)
 
 
+
+
     #I1_l_kp = cv2.drawKeypoints(I1_l, kp, None, color=(255,0,0))
     #cv2.imshow("Features detected",I1_l_kp)
     #cv2.waitKey(1)
@@ -91,16 +431,61 @@ def visodo(I1_l, I1_r, I2_l, I2_r, P1, P2):
     # Close window using esc key
 
 
+# def main():
+    
+#     images_path = "/Users/pranayspeed/Work/git_repos_other/00"
+#     images_left = images_path +"/image_2"
+#     images_right = images_path +"/image_3"
+#     for i in range(500):
+#         curr_image = str(i).zfill(6)+".png"
+#         images_left_i = images_left+"/"+curr_image
+#         images_right_i = images_right+"/"+curr_image
+#         print(images_left_i)
+#         I1_l = cv2.imread(images_left_i)#, cv2.COLOR_BGR2GRAY)
+#         I1_r = cv2.imread(images_right_i)#, cv2.COLOR_BGR2GRAY)
+#         #cv2.imshow("image_left", I1_l)
+#         #cv2.imshow("image-right", I1_r)
+#         if i ==0:
+#             I2_l= I1_l
+#             I2_r= I1_r
+#             continue 
+
+#         P1=[]
+#         P2 = []
+#         visodo(I1_l, I1_r, I2_l, I2_r, P1, P2)
+#         I2_l= I1_l
+#         I2_r= I1_r
+
+
+def display_traj(traj, curr_pose):
+    #print(curr_pose)
+    x_trans = 300
+    y_trans = 400
+    curr_2d_pos = (int(curr_pose[0, 3])+x_trans,y_trans - int(curr_pose[2, 3]))
+    print(curr_2d_pos)
+    traj = cv2.circle(traj,curr_2d_pos,2,(0, 255,255), 1)
+
+    cv2.imshow("traj", traj)
+    #cv2.waitKey(1)
+
 def main():
     
+    calib_file = "/Users/pranayspeed/Work/git_repos_other/00/calib.txt"
     images_path = "/Users/pranayspeed/Work/git_repos_other/00"
     images_left = images_path +"/image_2"
     images_right = images_path +"/image_3"
-    for i in range(500):
+
+    vo = Visual_Odometry_Stereo(calib_file, 500)
+
+
+    traj = np.zeros((600,600,3))
+    estimated_path =[]
+    curr_pose = np.identity(4)
+    for i in range(2000):
         curr_image = str(i).zfill(6)+".png"
         images_left_i = images_left+"/"+curr_image
         images_right_i = images_right+"/"+curr_image
-        print(images_left_i)
+        #print(images_left_i)
         I1_l = cv2.imread(images_left_i)#, cv2.COLOR_BGR2GRAY)
         I1_r = cv2.imread(images_right_i)#, cv2.COLOR_BGR2GRAY)
         #cv2.imshow("image_left", I1_l)
@@ -109,12 +494,21 @@ def main():
             I2_l= I1_l
             I2_r= I1_r
             continue 
+        
+        transf = vo.extract_and_track(I2_l, I2_r, I1_l, I1_r)
+        curr_pose = np.matmul(curr_pose, transf)
+        estimated_path.append((curr_pose[0, 3], curr_pose[2, 3]))
 
-        P1=[]
-        P2 = []
-        visodo(I1_l, I1_r, I2_l, I2_r, P1, P2)
+        display_traj(traj, curr_pose)
+
+        
+        cv2.imshow("frame", I1_l)
+        cv2.waitKey(1)
+
+        #draw_geometries([vo.pts3d])
         I2_l= I1_l
         I2_r= I1_r
+
 
 if __name__ == "__main__":
     main()
