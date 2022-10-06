@@ -7,83 +7,8 @@ from scipy.optimize import least_squares
 #from open3d.visualization import *  
 
 import matplotlib.pyplot as plt
-from mpl_toolkits import mplot3d
 
 # use mplotlib figure to draw in 3D trajectories 
-
-kPlotSleep = 0.0001 
-class Mplot3d:
-    def __init__(self, title=''):
-        self.fig = plt.figure()
-        self.ax = self.fig.gca(projection='3d') 
-        if title is not '':
-            self.ax.set_title(title)     
-        self.ax.set_xlabel('X axis')
-        self.ax.set_ylabel('Y axis')
-        self.ax.set_zlabel('Z axis')		   		
-
-        self.axis_computed = False 
-        self.xlim = [float("inf"),float("-inf")]
-        self.ylim = [float("inf"),float("-inf")]
-        self.zlim = [float("inf"),float("-inf")]        
-
-        self.handle_map = {}
-        self.setAxis()
-
-    def setAxis(self):		
-        self.ax.axis('equal')        
-        if self.axis_computed:	
-            self.ax.set_xlim(self.xlim)
-            self.ax.set_ylim(self.ylim)  
-            self.ax.set_zlim(self.zlim)                             
-        self.ax.legend()
-
-    def drawTraj(self, traj, name, color='r', marker='.'):
-        np_traj = np.asarray(traj)        
-        if name in self.handle_map:
-            handle = self.handle_map[name]
-            self.ax.collections.remove(handle)
-        self.updateMinMax(np_traj)
-        handle = self.ax.scatter3D(np_traj[:, 0], np_traj[:, 1], np_traj[:, 2], c=color, marker=marker)
-        handle.set_label(name)
-        self.handle_map[name] = handle
-
-    def updateMinMax(self, np_traj):
-        xmax,ymax,zmax = np.amax(np_traj,axis=0)
-        xmin,ymin,zmin = np.amin(np_traj,axis=0)        
-        cx = 0.5*(xmax+xmin)
-        cy = 0.5*(ymax+ymin)
-        cz = 0.5*(zmax+zmin) 
-        if False: 
-            # update maxs       
-            if xmax > self.xlim[1]:
-                self.xlim[1] = xmax 
-            if ymax > self.ylim[1]:
-                self.ylim[1] = ymax 
-            if zmax > self.zlim[1]:
-                self.zlim[1] = zmax                         
-            # update mins
-            if xmin < self.xlim[0]:
-                self.xlim[0] = xmin   
-            if ymin < self.ylim[0]:
-                self.ylim[0] = ymin        
-            if zmin < self.zlim[0]:
-                self.zlim[0] = zmin     
-        # make axis actually squared
-        if True:
-            #smin = min(self.xlim[0],self.ylim[0],self.zlim[0])                                            
-            #smax = max(self.xlim[1],self.ylim[1],self.zlim[1])
-            smin = min(xmin,ymin,zmin)                                            
-            smax = max(xmax,ymax,zmax)            
-            delta = 0.5*(smax - smin)
-            self.xlim = [cx-delta,cx+delta]
-            self.ylim = [cy-delta,cy+delta]
-            self.zlim = [cz-delta,cz+delta]      
-        self.axis_computed = True   
-
-    def refresh(self):
-        self.setAxis()
-        plt.pause(kPlotSleep)
 
 
 def poseRt(R, t):
@@ -362,111 +287,113 @@ class Visual_Odometry_Stereo:
 
 
 
-def visodo(I1_l, I1_r, I2_l, I2_r, P1, P2):
+# def visodo(I1_l, I1_r, I2_l, I2_r, P1, P2):
     
     
-    I1_l_gray = cv2.cvtColor(I1_l, cv2.COLOR_BGR2GRAY)
-    I1_r_gray = cv2.cvtColor(I1_r, cv2.COLOR_BGR2GRAY)
-    I2_l_gray = cv2.cvtColor(I2_l, cv2.COLOR_BGR2GRAY)
-    I2_r_gray = cv2.cvtColor(I2_r, cv2.COLOR_BGR2GRAY)
+#     I1_l_gray = cv2.cvtColor(I1_l, cv2.COLOR_BGR2GRAY)
+#     I1_r_gray = cv2.cvtColor(I1_r, cv2.COLOR_BGR2GRAY)
+#     I2_l_gray = cv2.cvtColor(I2_l, cv2.COLOR_BGR2GRAY)
+#     I2_r_gray = cv2.cvtColor(I2_r, cv2.COLOR_BGR2GRAY)
 
-    stereo = cv2.StereoBM_create()
-    disparity_1 = stereo.compute(I1_l_gray, I1_r_gray)
-    disparity_2 = stereo.compute(I2_l_gray, I2_r_gray)
+#     stereo = cv2.StereoBM_create()
+#     disparity_1 = stereo.compute(I1_l_gray, I1_r_gray)
+#     disparity_2 = stereo.compute(I2_l_gray, I2_r_gray)
 
-    disparity_1 = disparity_1.astype(np.float32)
-    disparity_2 = disparity_2.astype(np.float32)
+#     disparity_1 = disparity_1.astype(np.float32)
+#     disparity_2 = disparity_2.astype(np.float32)
 
-    # Scaling down the disparity values and normalizing them
-    #disparity = (disparity/16.0 - minDisparity)/numDisparities
+#     # Scaling down the disparity values and normalizing them
+#     #disparity = (disparity/16.0 - minDisparity)/numDisparities
 
-    # Displaying the disparity map
+#     # Displaying the disparity map
 
-    #cv2.imshow("disp1",disparity_1)
-    #cv2.waitKey(1)
-    #cv2.imshow("disp2",disparity_2)
-    #cv2.waitKey(1)
-
-
-    fast = cv2.FastFeatureDetector_create()
-    # find and draw the keypoints
-    I1_l_kp = fast.detect(I1_l_gray,None)
-    I2_l_kp = fast.detect(I2_l_gray,None)    
-    feature_params = dict( maxCorners = 500,   # How many pts. to locate
-                       qualityLevel = 0.1,  # b/w 0 & 1, min. quality below which everyone is rejected
-                       minDistance = 7,   # Min eucledian distance b/w corners detected
-                       blockSize = 3 ) # Size of an average block for computing a derivative covariation matrix over each pixel neighborhood
+#     #cv2.imshow("disp1",disparity_1)
+#     #cv2.waitKey(1)
+#     #cv2.imshow("disp2",disparity_2)
+#     #cv2.waitKey(1)
 
 
-    I1_l_pts = cv2.goodFeaturesToTrack(I1_l_gray, mask=None, **feature_params)
-    # calculate optical flow
-    I2_l_pts, st, err = cv2.calcOpticalFlowPyrLK(I1_l_gray, I2_l_gray, I1_l_pts, None)
-
-    # Select good points
-    good_new = I2_l_pts[st==1]
-    good_old = I1_l_pts[st==1]
-
-    mask = np.zeros_like(I2_l)
-    # draw the tracks
-    for i,(new,old) in enumerate(zip(good_new,good_old)):
-        a,b = new.ravel() #tmp new value
-        c,d = old.ravel() #tmp old value
-        #draws a line connecting the old point with the new point
-        print(a,b,c,d)
-        mask = cv2.line(mask, (int(a),int(b)),(int(c),int(d)), (0,255,0), 1)
-        #draws the new point
-        I2_l_tracked = cv2.circle(I2_l,(int(a),int(b)),2,(0,0,255), -1)
-    I2_l_tracked = cv2.add(I2_l_tracked,mask)
-    cv2.imshow("flow tracked",I2_l_tracked)
-    cv2.waitKey(1)
+#     fast = cv2.FastFeatureDetector_create()
+#     # find and draw the keypoints
+#     I1_l_kp = fast.detect(I1_l_gray,None)
+#     I2_l_kp = fast.detect(I2_l_gray,None)    
+#     feature_params = dict( maxCorners = 500,   # How many pts. to locate
+#                        qualityLevel = 0.1,  # b/w 0 & 1, min. quality below which everyone is rejected
+#                        minDistance = 7,   # Min eucledian distance b/w corners detected
+#                        blockSize = 3 ) # Size of an average block for computing a derivative covariation matrix over each pixel neighborhood
 
 
+#     I1_l_pts = cv2.goodFeaturesToTrack(I1_l_gray, mask=None, **feature_params)
+#     # calculate optical flow
+#     I2_l_pts, st, err = cv2.calcOpticalFlowPyrLK(I1_l_gray, I2_l_gray, I1_l_pts, None)
+
+#     # Select good points
+#     good_new = I2_l_pts[st==1]
+#     good_old = I1_l_pts[st==1]
+
+#     mask = np.zeros_like(I2_l)
+#     # draw the tracks
+#     for i,(new,old) in enumerate(zip(good_new,good_old)):
+#         a,b = new.ravel() #tmp new value
+#         c,d = old.ravel() #tmp old value
+#         #draws a line connecting the old point with the new point
+#         #print(a,b,c,d)
+#         mask = cv2.line(mask, (int(a),int(b)),(int(c),int(d)), (0,255,0), 1)
+#         #draws the new point
+#         I2_l_tracked = cv2.circle(I2_l,(int(a),int(b)),2,(0,0,255), -1)
+#     I2_l_tracked = cv2.add(I2_l_tracked,mask)
+#     cv2.imshow("flow tracked",I2_l_tracked)
+#     cv2.waitKey(1)
 
 
-    #I1_l_kp = cv2.drawKeypoints(I1_l, kp, None, color=(255,0,0))
-    #cv2.imshow("Features detected",I1_l_kp)
-    #cv2.waitKey(1)
-    #cv2.imshow("disp2",disparity_2)
-    #cv2.waitKey(1)
-    # Close window using esc key
 
 
-# def main():
+#     #I1_l_kp = cv2.drawKeypoints(I1_l, kp, None, color=(255,0,0))
+#     #cv2.imshow("Features detected",I1_l_kp)
+#     #cv2.waitKey(1)
+#     #cv2.imshow("disp2",disparity_2)
+#     #cv2.waitKey(1)
+#     # Close window using esc key
+
+
+# # def main():
     
-#     images_path = "/Users/pranayspeed/Work/git_repos_other/00"
-#     images_left = images_path +"/image_2"
-#     images_right = images_path +"/image_3"
-#     for i in range(500):
-#         curr_image = str(i).zfill(6)+".png"
-#         images_left_i = images_left+"/"+curr_image
-#         images_right_i = images_right+"/"+curr_image
-#         print(images_left_i)
-#         I1_l = cv2.imread(images_left_i)#, cv2.COLOR_BGR2GRAY)
-#         I1_r = cv2.imread(images_right_i)#, cv2.COLOR_BGR2GRAY)
-#         #cv2.imshow("image_left", I1_l)
-#         #cv2.imshow("image-right", I1_r)
-#         if i ==0:
-#             I2_l= I1_l
-#             I2_r= I1_r
-#             continue 
+# #     images_path = "/Users/pranayspeed/Work/git_repos_other/00"
+# #     images_left = images_path +"/image_2"
+# #     images_right = images_path +"/image_3"
+# #     for i in range(500):
+# #         curr_image = str(i).zfill(6)+".png"
+# #         images_left_i = images_left+"/"+curr_image
+# #         images_right_i = images_right+"/"+curr_image
+# #         print(images_left_i)
+# #         I1_l = cv2.imread(images_left_i)#, cv2.COLOR_BGR2GRAY)
+# #         I1_r = cv2.imread(images_right_i)#, cv2.COLOR_BGR2GRAY)
+# #         #cv2.imshow("image_left", I1_l)
+# #         #cv2.imshow("image-right", I1_r)
+# #         if i ==0:
+# #             I2_l= I1_l
+# #             I2_r= I1_r
+# #             continue 
 
-#         P1=[]
-#         P2 = []
-#         visodo(I1_l, I1_r, I2_l, I2_r, P1, P2)
-#         I2_l= I1_l
-#         I2_r= I1_r
+# #         P1=[]
+# #         P2 = []
+# #         visodo(I1_l, I1_r, I2_l, I2_r, P1, P2)
+# #         I2_l= I1_l
+# #         I2_r= I1_r
 
 
-def display_traj(traj, curr_pose):
+def display_traj(traj, curr_pose, frame):
     #print(curr_pose)
-    x_trans = 300
+    x_trans = 800
     y_trans = 400
     curr_2d_pos = (int(curr_pose[0, 3])+x_trans,y_trans - int(curr_pose[2, 3]))
-    print(curr_2d_pos)
-    traj = cv2.circle(traj,curr_2d_pos,2,(0, 255,255), 1)
+    #print(curr_2d_pos)
+    traj = cv2.circle(traj,curr_2d_pos,2,(0, 0,255), 1)
 
-    cv2.imshow("traj", traj)
-    #cv2.waitKey(1)
+    print(frame.dtype, traj.dtype, frame.shape, traj.shape)
+    frame_new = cv2.vconcat([frame, traj.astype(np.uint8)])
+    cv2.imshow("traj", frame_new)
+    cv2.waitKey(1)
 
 def main():
     
@@ -478,9 +405,14 @@ def main():
     vo = Visual_Odometry_Stereo(calib_file, 500)
 
 
-    traj = np.zeros((600,600,3))
+    traj = np.zeros((600,1241,3))
     estimated_path =[]
     curr_pose = np.identity(4)
+
+    
+    points_3d = None
+
+    absolute_transf = np.identity(4)
     for i in range(2000):
         curr_image = str(i).zfill(6)+".png"
         images_left_i = images_left+"/"+curr_image
@@ -490,6 +422,8 @@ def main():
         I1_r = cv2.imread(images_right_i)#, cv2.COLOR_BGR2GRAY)
         #cv2.imshow("image_left", I1_l)
         #cv2.imshow("image-right", I1_r)
+
+        print(I1_l.shape)
         if i ==0:
             I2_l= I1_l
             I2_r= I1_r
@@ -497,14 +431,35 @@ def main():
         
         transf = vo.extract_and_track(I2_l, I2_r, I1_l, I1_r)
         curr_pose = np.matmul(curr_pose, transf)
+
+        absolute_transf = transf @absolute_transf 
         estimated_path.append((curr_pose[0, 3], curr_pose[2, 3]))
 
-        display_traj(traj, curr_pose)
+        display_traj(traj, curr_pose, I1_l)
 
         
-        cv2.imshow("frame", I1_l)
-        cv2.waitKey(1)
+        # cv2.imshow("frame", I1_l)
+        # cv2.waitKey(1)
 
+
+        if points_3d is None:
+            points_3d = vo.pts3d
+        else:
+            #new_pts = vo.pts3d @ transf[:3,:] #np.matmul(vo.pts3d, transf)
+            rmat =     curr_pose[:3, :3]
+            tmat =      curr_pose[:3, 3]
+            tranlate_pts = (vo.pts3d - tmat)
+            world_point = (rmat ** -1 @ (tranlate_pts.T)).T
+
+            
+            #print(transf[:3,:].shape, vo.pts3d.shape)
+            #new_pts =  (vo.pts3d @ curr_pose[:3,:]) [:, :3]
+            #new_pts =np.matmul(vo.pts3d, transf[:3,:]) [:, :3]
+            #print(new_pts.shape)
+            points_3d = np.vstack([points_3d, world_point])
+        #traj3d.refresh()
+        #traj3d.drawTraj(points_3d, "traj3d")
+        
         #draw_geometries([vo.pts3d])
         I2_l= I1_l
         I2_r= I1_r
